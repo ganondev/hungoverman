@@ -1,6 +1,6 @@
 import type { GameObj, KAPLAYCtx } from 'kaplay'
 import { guess, newGame, type Game } from '../game'
-import { layout, type Slot } from '../layout'
+import { layout, type Run, type Slot } from '../layout'
 import type { StrikeDisplayFactory } from '../strikes/types'
 
 const PITCH = 32
@@ -9,12 +9,23 @@ const CELL = 28
 const UNDERLINE_W = 3
 const ROW_Y = 300
 
+/** Structural marks sit a step back from the ink, so letters stay the focus. */
+const INK: [number, number, number] = [232, 232, 239]
+const DIM: [number, number, number] = [120, 120, 136]
+
 /** Blank underlines are plucked on a slow cycle: pulled taut, then released. */
 const PULSE_PERIOD = 2.2 // seconds between plucks
 const PULSE_PULL = 0.18 // seconds spent drawing the band taut
 const PULSE_REST = 0.78 // idle length, as a fraction of the cell width
 const PULSE_FREQ = 2.2 // ring rate, Hz
 const PULSE_DECAY = 4 // how fast the ring dies down
+
+/** Brackets ride the same envelope, as travel: how far they swing at taut. */
+const BRACKET_TRAVEL = 5
+
+/** Dots bridging an unrevealed gap between runs. */
+const GAP_DOT_R = 1.5
+const GAP_DOT_STEP = 8
 
 const KEY_W = 56
 const KEY_H = 48
@@ -104,31 +115,70 @@ function drawRow(k: KAPLAYCtx, game: Game): void {
     return
   }
 
-  const width =
-    runs.reduce((acc, run) => acc + run.length * PITCH, 0) + (runs.length - 1) * GAP
-  let x = (k.width() - width) / 2 + PITCH / 2
+  // A visible space abutting a boundary is known content, not a hole, so the
+  // run gap is not stacked on top of its column. That keeps the space dot one
+  // column from the following run whichever side its visible neighbour is on
+  // (a space with hidden cells on its right is a run's last slot, and the same
+  // space with hidden cells on its left is a run's first slot). The gap is left
+  // to mean "hidden cells only".
+  const gaps: number[] = runs.slice(1).map((run, i) => (isHole(runs[i], run) ? GAP : 0))
 
-  for (const run of runs) {
+  const width =
+    runs.reduce((acc, run) => acc + run.length * PITCH, 0) +
+    gaps.reduce((acc, gap) => acc + gap, 0)
+
+  let x = (k.width() - width) / 2 + PITCH / 2
+  let prevEnd = -1 // centre of the previous run's last slot
+
+  runs.forEach((run, i) => {
+    if (i > 0 && gaps[i - 1] > 0) drawBridge(k, prevEnd + CELL / 2, x - CELL / 2)
     for (const slot of run) {
       drawSlot(k, slot, x, now)
       x += PITCH
     }
-    x += GAP
+    prevEnd = x - PITCH
+    if (i < runs.length - 1) x += gaps[i]
+  })
+}
+
+/**
+ * True when the boundary between two runs is a hole in the line — i.e. the
+ * only thing between them is hidden cells. A visible space on either edge means
+ * the boundary is a joint instead, and joints are not bridged.
+ */
+function isHole(prev: Run, next: Run): boolean {
+  return prev[prev.length - 1].kind !== 'space' && next[0].kind !== 'space'
+}
+
+/**
+ * Dots spanning the dead space between two runs. The span is fixed, so it
+ * carries no information about how many cells are still hidden.
+ */
+function drawBridge(k: KAPLAYCtx, from: number, to: number): void {
+  const count = Math.floor((to - from) / GAP_DOT_STEP)
+  const start = (from + to) / 2 - ((count - 1) * GAP_DOT_STEP) / 2
+  for (let i = 0; i < count; i++) {
+    k.drawCircle({
+      pos: k.vec2(start + i * GAP_DOT_STEP, CELL / 2),
+      radius: GAP_DOT_R,
+      color: k.rgb(...DIM),
+    })
   }
 }
 
 function drawSlot(k: KAPLAYCtx, slot: Slot, cx: number, now: number): void {
-  const ink = k.rgb(232, 232, 239)
+  const ink = k.rgb(...INK)
   switch (slot.kind) {
     case 'letter': {
-      // A blank slot is pulled taut and released on a slow cycle; a solved one
-      // holds a steady full-length rule.
-      const half = (CELL * (slot.ch === null ? pluck(now) : 1)) / 2
+      // A blank slot is scaffolding: dim, and pulled taut and released on a
+      // slow cycle. A solved one keeps the ink and a steady full-length rule.
+      const blank = slot.ch === null
+      const half = (CELL * (blank ? pluck(now) : 1)) / 2
       k.drawLine({
         p1: k.vec2(cx - half, CELL / 2),
         p2: k.vec2(cx + half, CELL / 2),
         width: UNDERLINE_W,
-        color: ink,
+        color: blank ? k.rgb(...DIM) : ink,
       })
       if (slot.ch !== null) {
         k.drawText({
@@ -142,37 +192,43 @@ function drawSlot(k: KAPLAYCtx, slot: Slot, cx: number, now: number): void {
       break
     }
     case 'space':
-      k.drawCircle({ pos: k.vec2(cx, CELL / 2 - 3), radius: 3, color: ink })
+      k.drawCircle({ pos: k.vec2(cx, CELL / 2 - 3), radius: 3, color: k.rgb(...DIM) })
       break
     case 'start':
-    case 'end':
+    case 'end': {
+      // The bracket rides the pluck envelope as travel rather than scale, so
+      // the word breathes outward instead of the glyph growing.
+      const dir = slot.kind === 'start' ? -1 : 1
       k.drawText({
         text: slot.kind === 'start' ? '[' : ']',
         size: 30,
-        pos: k.vec2(cx, 0),
+        pos: k.vec2(cx + dir * BRACKET_TRAVEL * pluckSwing(now), 0),
         anchor: 'center',
-        color: ink,
+        color: k.rgb(...DIM),
       })
       break
+    }
   }
 }
 
 /**
- * Length of a blank underline as a fraction of the cell width. The cycle is a
- * slow pull out to taut, then a small damped rebound as the band is released,
- * then rest until the next pluck. The rebound is ceilinged at 1 by
- * construction, so a stretched slot never reaches its neighbour.
+ * Pluck envelope in [-1, 1]: 0 at rest, rising to 1 as the band is drawn taut,
+ * then a damped rebound through negative values. The rebound is ceilinged at 1
+ * by construction, so a stretched slot never reaches its neighbour.
  */
-function pluck(now: number): number {
-  const swing = 1 - PULSE_REST
+function pluckSwing(now: number): number {
   const phase = now % PULSE_PERIOD
 
   if (phase < PULSE_PULL) {
     const pull = phase / PULSE_PULL
-    return PULSE_REST + swing * (1 - (1 - pull) ** 3)
+    return 1 - (1 - pull) ** 3
   }
 
   const ring = phase - PULSE_PULL
-  const decay = Math.exp(-PULSE_DECAY * ring)
-  return PULSE_REST + swing * Math.cos(2 * Math.PI * PULSE_FREQ * ring) * decay
+  return Math.cos(2 * Math.PI * PULSE_FREQ * ring) * Math.exp(-PULSE_DECAY * ring)
+}
+
+/** Length of a blank underline as a fraction of the cell width. */
+function pluck(now: number): number {
+  return PULSE_REST + (1 - PULSE_REST) * pluckSwing(now)
 }
