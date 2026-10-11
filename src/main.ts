@@ -1,5 +1,6 @@
 import kaplay from 'kaplay'
 import { registerEnd } from './scenes/end'
+import { registerMenu } from './scenes/menu'
 import { registerPlay } from './scenes/play'
 import { gallows } from './strikes/gallows'
 import { pickWord } from './words'
@@ -12,6 +13,7 @@ const k = kaplay({
   global: false,
 })
 
+registerMenu(k)
 registerPlay(k, gallows, pickWord)
 registerEnd(k)
-k.go('play')
+k.go('menu')
