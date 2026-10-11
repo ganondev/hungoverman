@@ -8,13 +8,13 @@ const GAP = 48
 const CELL = 28
 const ROW_Y = 300
 
-const KEY_COLS = 13
 const KEY_W = 56
 const KEY_H = 48
 const KEY_PAD = 8
-const KEY_Y = 440
+const KEY_Y = 410
+const INPUT_DEBOUNCE = 0.2
 
-const LETTERS = 'abcdefghijklmnopqrstuvwxyz'
+const KEY_ROWS = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm']
 
 export function registerPlay(
   k: KAPLAYCtx,
@@ -34,32 +34,38 @@ export function registerPlay(
     row.onDraw(() => drawRow(k, game))
 
     const keys = new Map<string, GameObj>()
-    const kbWidth = KEY_COLS * KEY_W + (KEY_COLS - 1) * KEY_PAD
-    const kbX = (k.width() - kbWidth) / 2
-    for (const [i, ch] of [...LETTERS].entries()) {
-      const col = i % KEY_COLS
-      const rowIdx = Math.floor(i / KEY_COLS)
-      const key = k.add([
-        k.pos(kbX + col * (KEY_W + KEY_PAD), KEY_Y + rowIdx * (KEY_H + KEY_PAD)),
-        k.rect(KEY_W, KEY_H, { radius: 6 }),
-        k.color(40, 40, 52),
-        k.opacity(1),
-        k.area(),
-      ])
-      key.add([
-        k.pos(KEY_W / 2, KEY_H / 2),
-        k.anchor('center'),
-        k.text(ch.toUpperCase(), { size: 22 }),
-        k.color(232, 232, 239),
-      ])
-      key.onClick(() => submit(ch))
-      keys.set(ch, key)
+    for (const [rowIdx, letters] of KEY_ROWS.entries()) {
+      const rowWidth = letters.length * KEY_W + (letters.length - 1) * KEY_PAD
+      const rowX = (k.width() - rowWidth) / 2
+      for (const [col, ch] of [...letters].entries()) {
+        const key = k.add([
+          k.pos(rowX + col * (KEY_W + KEY_PAD), KEY_Y + rowIdx * (KEY_H + KEY_PAD)),
+          k.rect(KEY_W, KEY_H, { radius: 6 }),
+          k.color(40, 40, 52),
+          k.opacity(1),
+          k.area(),
+        ])
+        key.add([
+          k.pos(KEY_W / 2, KEY_H / 2),
+          k.anchor('center'),
+          k.text(ch.toUpperCase(), { size: 22 }),
+          k.color(232, 232, 239),
+        ])
+        key.onClick(() => submit(ch))
+        keys.set(ch, key)
+      }
     }
 
     k.onCharInput((ch) => submit(ch))
 
+    let lastInputAt = -Infinity
+
     function submit(ch: string): void {
       if (finished) return
+      const now = k.time()
+      if (now - lastInputAt < INPUT_DEBOUNCE) return
+      lastInputAt = now
+
       const next = guess(game, ch)
       if (next === game) return
       game = next
