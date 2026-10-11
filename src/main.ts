@@ -8,6 +8,7 @@ const k = kaplay({
   width: 960,
   height: 600,
   background: [11, 11, 15],
+  pixelDensity: 2,
   global: false,
 })
 
