@@ -6,7 +6,15 @@ import type { StrikeDisplayFactory } from '../strikes/types'
 const PITCH = 32
 const GAP = 48
 const CELL = 28
+const UNDERLINE_W = 3
 const ROW_Y = 300
+
+/** Blank underlines are plucked on a slow cycle: pulled taut, then released. */
+const PULSE_PERIOD = 2.2 // seconds between plucks
+const PULSE_PULL = 0.18 // seconds spent drawing the band taut
+const PULSE_REST = 0.78 // idle length, as a fraction of the cell width
+const PULSE_FREQ = 2.2 // ring rate, Hz
+const PULSE_DECAY = 4 // how fast the ring dies down
 
 const KEY_W = 56
 const KEY_H = 48
@@ -86,7 +94,15 @@ export function registerPlay(
 
 function drawRow(k: KAPLAYCtx, game: Game): void {
   const runs = layout(game)
-  if (runs.length === 0) return
+  const now = k.time()
+
+  // Nothing is visible yet: a lone blank slot stands in so the stage never
+  // reads as an empty screen. It is always exactly one slot, so it reveals
+  // nothing about the length of the phrase.
+  if (runs.length === 0) {
+    drawSlot(k, { kind: 'letter', ch: null }, k.width() / 2, now)
+    return
+  }
 
   const width =
     runs.reduce((acc, run) => acc + run.length * PITCH, 0) + (runs.length - 1) * GAP
@@ -94,23 +110,25 @@ function drawRow(k: KAPLAYCtx, game: Game): void {
 
   for (const run of runs) {
     for (const slot of run) {
-      drawSlot(k, slot, x)
+      drawSlot(k, slot, x, now)
       x += PITCH
     }
     x += GAP
   }
 }
 
-function drawSlot(k: KAPLAYCtx, slot: Slot, cx: number): void {
+function drawSlot(k: KAPLAYCtx, slot: Slot, cx: number, now: number): void {
   const ink = k.rgb(232, 232, 239)
   switch (slot.kind) {
-    case 'letter':
-      k.drawRect({
-        pos: k.vec2(cx - CELL / 2, -CELL / 2),
-        width: CELL,
-        height: CELL,
-        fill: false,
-        outline: { width: 2, color: ink },
+    case 'letter': {
+      // A blank slot is pulled taut and released on a slow cycle; a solved one
+      // holds a steady full-length rule.
+      const half = (CELL * (slot.ch === null ? pluck(now) : 1)) / 2
+      k.drawLine({
+        p1: k.vec2(cx - half, CELL / 2),
+        p2: k.vec2(cx + half, CELL / 2),
+        width: UNDERLINE_W,
+        color: ink,
       })
       if (slot.ch !== null) {
         k.drawText({
@@ -122,6 +140,7 @@ function drawSlot(k: KAPLAYCtx, slot: Slot, cx: number): void {
         })
       }
       break
+    }
     case 'space':
       k.drawCircle({ pos: k.vec2(cx, CELL / 2 - 3), radius: 3, color: ink })
       break
@@ -136,4 +155,24 @@ function drawSlot(k: KAPLAYCtx, slot: Slot, cx: number): void {
       })
       break
   }
+}
+
+/**
+ * Length of a blank underline as a fraction of the cell width. The cycle is a
+ * slow pull out to taut, then a small damped rebound as the band is released,
+ * then rest until the next pluck. The rebound is ceilinged at 1 by
+ * construction, so a stretched slot never reaches its neighbour.
+ */
+function pluck(now: number): number {
+  const swing = 1 - PULSE_REST
+  const phase = now % PULSE_PERIOD
+
+  if (phase < PULSE_PULL) {
+    const pull = phase / PULSE_PULL
+    return PULSE_REST + swing * (1 - (1 - pull) ** 3)
+  }
+
+  const ring = phase - PULSE_PULL
+  const decay = Math.exp(-PULSE_DECAY * ring)
+  return PULSE_REST + swing * Math.cos(2 * Math.PI * PULSE_FREQ * ring) * decay
 }
