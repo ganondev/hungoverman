@@ -26,8 +26,9 @@ export function registerPlay(
     let game = newGame(pickWord(), display.maxStrikes)
     let finished = false
 
-    const strikeAnchor = k.add([k.pos(48, 40)])
-    display.mount(k, strikeAnchor, { w: 200, h: 220 })
+    const strikeSize = { w: 200, h: 220 }
+    const strikeAnchor = k.add([k.pos((k.width() - strikeSize.w) / 2, 40)])
+    display.mount(k, strikeAnchor, strikeSize)
     display.setStrikes(0)
 
     const row = k.add([k.pos(0, ROW_Y)])
