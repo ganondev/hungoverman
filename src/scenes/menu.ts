@@ -8,8 +8,9 @@ const BTN_W = 220
 const BTN_H = 56
 const BTN_Y = 320
 const HOVER_OPACITY = 0.8
+const LOADING_OPACITY = 0.5
 
-export function registerMenu(k: KAPLAYCtx): void {
+export function registerMenu(k: KAPLAYCtx, wordlistReady: Promise<void>): void {
   k.scene('menu', () => {
     const cx = k.width() / 2
 
@@ -19,18 +20,36 @@ export function registerMenu(k: KAPLAYCtx): void {
       k.pos(cx - BTN_W / 2, BTN_Y),
       k.rect(BTN_W, BTN_H, { radius: 8 }),
       k.color(...BTN_BG),
-      k.opacity(1),
+      k.opacity(LOADING_OPACITY),
       k.area(),
     ])
-    button.add([
+    const label = button.add([
       k.pos(BTN_W / 2, BTN_H / 2),
       k.anchor('center'),
-      k.text('Start', { size: 24 }),
+      k.text('Loading...', { size: 24 }),
       k.color(...INK),
+      k.opacity(LOADING_OPACITY),
     ])
 
-    button.onHover(() => (button.opacity = HOVER_OPACITY))
-    button.onHoverEnd(() => (button.opacity = 1))
-    button.onClick(() => k.go('play'))
+    // Start is dead until the wordlist resolves, so the first click can never
+    // build a round from an empty pool. Until then the button reads
+    // "Loading..." and stays dimmed.
+    let ready = false
+
+    wordlistReady.then(() => {
+      if (!button.exists()) return // menu was left before the list landed
+      ready = true
+      label.text = 'Start'
+      button.opacity = 1
+      label.opacity = 1
+    })
+
+    button.onHover(() => {
+      if (ready) button.opacity = HOVER_OPACITY
+    })
+    button.onHoverEnd(() => (button.opacity = ready ? 1 : LOADING_OPACITY))
+    button.onClick(() => {
+      if (ready) k.go('play')
+    })
   })
 }
